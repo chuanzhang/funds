@@ -29,6 +29,13 @@ namespace funds
         //国际QDII基金
         public static Dictionary<String, FundInfo> gQDIIFundInfoDict = new Dictionary<string, FundInfo>();
 
+        //不需要展示的基金
+        public static Dictionary<String, String> expFundInfoDict = new Dictionary<string, string>();
+
+        //股票涨跌本地缓存，含指数
+        public static Dictionary<String, float> gStockPriceDict = new Dictionary<string, float>();
+
+
         //指数涨幅，小数表示，非百分比
         public static float sseIndexIncr = 0; // 上证指数涨幅
         public static float geiIndexIncr = 0; //创业板指数涨幅
@@ -39,10 +46,13 @@ namespace funds
 
         public delegate void CallBackDelegateParam(String text);
 
+        private static string yesterdayEstimateValueFileName = "yesterdayEstimateValue.txt";
+
         public MainForm()
         {
             this.SizeChanged += MainForm_SizeChanged;
             InitializeComponent();
+            this.searchBox.KeyDown += SearchBox_KeyDown;
         }
 
 
@@ -51,6 +61,31 @@ namespace funds
             
             Thread th = new Thread(Init);
             th.Start();
+        }
+
+        /// <summary>
+        /// 基金搜索
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
+        private void SearchBox_KeyDown(object sender, KeyEventArgs e)
+        {
+            
+            if (e.KeyCode == Keys.Enter)
+            {
+                String text = searchBox.Text.Trim();
+                if (text == "") return;
+                dataGridView1.ClearSelection();
+                for (int i = 0; i < dataGridView1.Rows.Count; i++) {
+                    if (dataGridView1["FundName", i].Value.ToString().Contains(text)
+                        || dataGridView1["FundCode", i].Value.ToString().Contains(text)) {
+                        dataGridView1.CurrentCell = dataGridView1["FundCode", i];
+                        dataGridView1.Rows[i].Selected = true;
+                        dataGridView1.FirstDisplayedScrollingRowIndex = i;
+                        break;
+                    }
+                }
+            }
         }
 
         /// <summary>
@@ -95,25 +130,30 @@ namespace funds
                 dataGridView1.Rows.Add(" ");
                 
                 dataGridView1["FundCode",i].Value = fundInfoKV.Key;
+                dataGridView1.Rows[i].HeaderCell.Value = i;
 
                 if (fundInfoKV.Value != null)
                 {
                     dataGridView1["FundName", i].Value = fundInfoKV.Value.fundName;
                     dataGridView1["CurrPrice", i].Value = fundInfoKV.Value.currPrice;
                     dataGridView1["CurrIncrease", i].Value = fundInfoKV.Value.currPercentageIncrease *100;
-                    dataGridView1["DealAmount", i].Value = (fundInfoKV.Value.dealAmount/10000).ToString("0.00");
+                    dataGridView1["DealAmount", i].Value = Math.Round((fundInfoKV.Value.dealAmount/10000),2);
                     //dataGridView1["FieldAmount", i].Value = fundInfoKV.Value.fieldAmount;
-                    dataGridView1["CurrEstimateValue", i].Value = fundInfoKV.Value.currEstimateValue;
+                    dataGridView1["CurrEstimateValue", i].Value = Math.Round(fundInfoKV.Value.currEstimateValue,4);
                     dataGridView1["YesterdayValue", i].Value = fundInfoKV.Value.fundYesterDayValue;
 
-                    dataGridView1["EstimateValuePremiumRate", i].Value = fundInfoKV.Value.currEstimateValuePremiumRate * 100;
-                    dataGridView1["Buy1StaticPremium", i].Value = fundInfoKV.Value.buy1StaticPremium * 100;
-                    dataGridView1["Buy1DynamicPremium", i].Value = fundInfoKV.Value.buy1DynamicPremium * 100;
-                    dataGridView1["HeavyIncrease", i].Value = fundInfoKV.Value.heavyIncrease * 100;
+                    dataGridView1["EstimateValuePremiumRate", i].Value = Math.Round(fundInfoKV.Value.currEstimateValuePremiumRate * 100,2);
+                    dataGridView1["Buy1StaticPremium", i].Value = Math.Round(fundInfoKV.Value.buy1StaticPremium * 100,2);
+                    dataGridView1["Buy1DynamicPremium", i].Value = Math.Round(fundInfoKV.Value.buy1DynamicPremium * 100,2);
+                    dataGridView1["HeavyIncrease", i].Value = Math.Round(fundInfoKV.Value.heavyIncrease * 100,2);
 
                     dataGridView1["StockPosition", i].Value = fundInfoKV.Value.stockPosition * 100;
                     dataGridView1["BuyAndSaleStatus", i].Value = fundInfoKV.Value.buyAndSaleStatus;
                     dataGridView1["FundStyle", i].Value = fundInfoKV.Value.fundStyle;
+
+                    if (fundInfoKV.Value.yesterdayEstimateValue > 0 && fundInfoKV.Value.fundYesterDayValue > 0) {
+                        dataGridView1["EstimateErrorRateYesterday", i].Value = Math.Round((fundInfoKV.Value.yesterdayEstimateValue - fundInfoKV.Value.fundYesterDayValue) *100  / fundInfoKV.Value.fundYesterDayValue, 2);
+                    }
 
                 }
                 
@@ -155,12 +195,30 @@ namespace funds
         /// 初始化时从文件读数据
         /// </summary>
         private int loadFundFile() {
-            String path = "LOF_FUNDS.xlsx";
-            DataSet fileData = ExcelReader.ToDataTable(path);
             this.Invoke(new CallBackDelegateParam(ShowStatus), new Object[] { "正在加载文件信息..." });
+
+            //先加载排除的基金列表
+            FileStream aFile = new FileStream("exp.txt", FileMode.Open);
+            StreamReader sr = new StreamReader(aFile);
+            String strLine = sr.ReadLine();
+            while (strLine != null)
+            {
+                if(!expFundInfoDict.ContainsKey(strLine)) expFundInfoDict.Add(strLine, "1");
+
+                strLine = sr.ReadLine();
+            }
+            sr.Close();
+
+            //加载基金列表
+            String path = "a.xlsx";
+            DataSet fileData = ExcelReader.ToDataTable(path);
+            
             for (int i = 0;i<fileData.Tables[0].Rows.Count;i++) {
                 FundInfo fi = new funds.FundInfo();
+                fi.fundCode = fileData.Tables[0].Rows[i][0].ToString();
                 
+                if (fi.fundCode == "" || expFundInfoDict.ContainsKey(fi.fundCode)) continue;
+
                 Dictionary<String,StockInfo> stockList = new Dictionary<String,StockInfo>();
                 fi.stockList = stockList;
 
@@ -169,7 +227,7 @@ namespace funds
                 {
                     fi.stockPosition = Convert.ToSingle(fileData.Tables[0].Rows[i][23]) / 100;
                     fi.unHeavyStockPosition = fi.stockPosition - Convert.ToSingle(fileData.Tables[0].Rows[i][22]) / 100;
-                
+                    
 
                     //加载最新净值(一般是上一交易日的净值)
                     if (fileData.Tables[0].Rows[i][24].ToString() == "") continue;
@@ -184,6 +242,11 @@ namespace funds
                         {
                             break;
                         }
+
+                        if (!gStockPriceDict.ContainsKey(stockInfo.stockCode)) {
+                            gStockPriceDict.Add(stockInfo.stockCode,0);
+                        }
+                        
                         if (fileData.Tables[0].Rows[i][2 * j + 3] != null) {
                             stockInfo.stockAmount = Convert.ToSingle(fileData.Tables[0].Rows[i][2 * j + 3])/100;
                         }
@@ -200,7 +263,7 @@ namespace funds
                     continue;
                 }
                 //加载到全局变量
-                gFundInfoDict.Add((String)fileData.Tables[0].Rows[i][0], fi);
+                gFundInfoDict.Add(fi.fundCode.Split('.')[0], fi);
 
                 //申赎状态，基金类型，如果为空，不影响加到全局变量
                 try
@@ -227,7 +290,69 @@ namespace funds
                 catch { }
 
             }
+
+            //读取指数基金信息
+            DataSet indexFundFileData = ExcelReader.ToDataTable("index_fund.xlsx");
+            for (int i = 0; i < indexFundFileData.Tables[0].Rows.Count; i++)
+            {
+                if (indexFundFileData.Tables[0].Rows[i][0] == DBNull.Value) continue;
+                String fundCode = (String)indexFundFileData.Tables[0].Rows[i][0];
+                fundCode = fundCode.Replace(".OF","");
+                if (!gFundInfoDict.ContainsKey(fundCode)) {
+                    continue;
+                }
+
+                String indexCode = (String)indexFundFileData.Tables[0].Rows[i][2];
+                if (!indexCode.EndsWith("SH") && !indexCode.EndsWith("SZ")) continue;
+
+                FundInfo fi = gFundInfoDict[fundCode];
+                if (fi == null) continue;
+                fi.isIndexFund = true;
+                fi.indexCode = indexCode;
+
+                if (!gStockPriceDict.ContainsKey(indexCode))
+                {
+                    gStockPriceDict.Add(indexCode, 0);
+                }
+            }
+
+                //如果有就读取
+            if (File.Exists(yesterdayEstimateValueFileName))
+            {
+                FileStream fs = new FileStream(yesterdayEstimateValueFileName, FileMode.Open, FileAccess.Read);
+                StreamReader streamReader = new StreamReader(fs);
+                string line = streamReader.ReadLine();
+                while (line != null && line.Contains("|")) {
+                    string[] info = line.Split('|');
+                    if (info[1].Length > 1) {
+                        FundInfo tempFundInfo = gFundInfoDict[info[0]];
+                        if (tempFundInfo != null) {
+                            try
+                            {
+                                tempFundInfo.yesterdayEstimateValue = (float)Convert.ToDouble(info[1]);
+                            }
+                            catch (Exception ex) {
+
+                            }
+                        }
+                    }
+                    line = streamReader.ReadLine();
+
+                }
+            }
+            else {
+                //没有则创建
+                FileStream fs = new FileStream(yesterdayEstimateValueFileName, FileMode.CreateNew);
+                fs.Close();
+            }
             return gFundInfoDict.Count;
+        }
+
+        /// <summary>
+        /// 查询所有股票涨跌幅，放到全局变量
+        /// </summary>
+        private void queryAllPrice() {
+
         }
 
 
@@ -252,9 +377,11 @@ namespace funds
                 MessageBox.Show("查询指数涨幅信息异常，后续的涨幅将按指数无涨幅计算");
             }
 
+            //查询接口
+            queryAllPrice();
 
             foreach (var fundInfoKV in fundInfoDict) {
-                String[] fullCode = fundInfoKV.Key.Split('.');
+                String[] fullCode = fundInfoKV.Value.fundCode.Split('.');
                 if (fullCode.Length < 2) continue;
                 queryResult = QuerySingleFundInfoByStockAPI(fullCode[1], fullCode[0]);
                 
@@ -266,51 +393,85 @@ namespace funds
                     continue;
                 }
 
-                //请求重仓股信息
-                if (fundInfoKV.Value.stockList == null || fundInfoKV.Value.stockList.Count == 0) continue;
-                String queryParam = "";
-                int geiCount = 0; //创业板股票数量，用于判断投资风格
-                foreach (var stockInfoKV in fundInfoKV.Value.stockList){
-                    if (queryParam.Length > 6) queryParam += '|';
-                    if (stockInfoKV.Key.StartsWith("6")){
-                        queryParam = queryParam + "SH:";
-                    }else{
-                        if (stockInfoKV.Key.StartsWith("300")) {
-                            geiCount++;
-                        }
-                            queryParam += "SZ:";
-                    }
-                    queryParam += stockInfoKV.Key;
-                }
-
-                //请求十大重仓股实时股价
-                String heavyStockResult = QueryStockPriceByStockAPI(queryParam);
-
-
-                //解析和计算实时估值
                 float rate1 = 0;
-                QueryResult qr = JSON.parse<QueryResult>(heavyStockResult);
-                if (qr.results != null || qr.results.Count > 0) {
-                    for (int i = 0; i < qr.results.Count; i++) {
-                        rate1 += Convert.ToSingle(qr.results[i][12]) * fundInfoKV.Value.stockList[(String)qr.results[i][1]].stockAmount;
-                    }
-                }
+                float rate2 = 0;
 
-                //计算实时估值
-                //先判断风格是大盘还是创业板，有7只及以上创业板的可认为该基金重仓创业板
-                float rat2 = 0;
-                if (geiCount > 6)
+                //如果是指数基金，直接按指数涨幅*0.95计算
+                if (fundInfoKV.Value.isIndexFund)
                 {
-                    rat2 = fundInfoKV.Value.unHeavyStockPosition * geiIndexIncr;
+                    String[] indexFullCode = fundInfoKV.Value.indexCode.Split('.');
+                    if (fullCode.Length < 2) continue;
+                    String originalResult = QuerySingleFundInfoByStockAPI(indexFullCode[1], indexFullCode[0]);
+
+                    QueryResult indexQr = JSON.parse<QueryResult>(originalResult);
+
+                    if (indexQr != null && indexQr.results != null && indexQr.results.Count > 0)
+                    {
+                        List<Object> resultList = indexQr.results[0];
+
+                        rate1 = Convert.ToSingle(resultList[36]) * 0.95f;
+                        rate2 = 0;
+                    }
 
                 }
-                else {
-                    rat2 = fundInfoKV.Value.unHeavyStockPosition * (sse50IndexIncr + geiIndexIncr) /2;
+                else
+                {
+                    //请求重仓股信息
+                    if (fundInfoKV.Value.stockList == null || fundInfoKV.Value.stockList.Count == 0) continue;
+                    String queryParam = "";
+                    int geiCount = 0; //创业板股票数量，用于判断投资风格
+                    foreach (var stockInfoKV in fundInfoKV.Value.stockList)
+                    {
+                        if (queryParam.Length > 6) queryParam += '|';
+                        if (stockInfoKV.Key.StartsWith("6"))
+                        {
+                            queryParam = queryParam + "SH:";
+                        }
+                        else
+                        {
+                            if (stockInfoKV.Key.StartsWith("300"))
+                            {
+                                geiCount++;
+                            }
+                            queryParam += "SZ:";
+                        }
+                        queryParam += stockInfoKV.Key;
+                    }
+
+                    //请求十大重仓股实时股价
+                    String heavyStockResult = QueryStockPriceByStockAPI(queryParam);
+
+
+                    //解析和计算实时估值
+
+                    QueryResult qr = JSON.parse<QueryResult>(heavyStockResult);
+                    if (qr.results != null || qr.results.Count > 0)
+                    {
+                        for (int i = 0; i < qr.results.Count; i++)
+                        {
+                            rate1 += Convert.ToSingle(qr.results[i][12]) * fundInfoKV.Value.stockList[(String)qr.results[i][1]].stockAmount;
+                        }
+                    }
+
+                    //计算实时估值
+                    //先判断风格是大盘还是创业板，有7只及以上创业板的可认为该基金重仓创业板
+
+                    if (geiCount > 6)
+                    {
+                        rate2 = fundInfoKV.Value.unHeavyStockPosition * geiIndexIncr;
+
+                    }
+                    else
+                    {
+                        rate2 = fundInfoKV.Value.unHeavyStockPosition * (sse50IndexIncr + geiIndexIncr) / 2;
+                    }
+
                 }
+
                 fundInfoKV.Value.heavyIncrease = rate1;
 
                 //实时估值等于昨日净值乘以今日估算增长率
-                fundInfoKV.Value.currEstimateValue = fundInfoKV.Value.fundYesterDayValue *(1+ rate1 + rat2);
+                fundInfoKV.Value.currEstimateValue = fundInfoKV.Value.fundYesterDayValue *(1+ rate1 + rate2);
 
                 //溢价率&折价率估算，场内价格-实时估值/实时估值
                 fundInfoKV.Value.currEstimateValuePremiumRate = (fundInfoKV.Value.currPrice- fundInfoKV.Value.currEstimateValue) / fundInfoKV.Value.currEstimateValue;
@@ -394,6 +555,35 @@ namespace funds
                 th.Start(gFundInfoDict);
             }
             
+
+        }
+
+        private void 保存ToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            DataSaver.DataGridViewToExcel(dataGridView1);
+        }
+
+        private void 保存当前估值ToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            DialogResult dr = MessageBox.Show("确认保存昨日估值吗？点确定将覆盖现有估值文件", "提示", MessageBoxButtons.OKCancel);
+            if (dr == DialogResult.Cancel)
+            {
+                //用户选择取消的操作
+                return;
+            }
+
+            FileStream fs = new FileStream(yesterdayEstimateValueFileName, FileMode.Truncate, FileAccess.ReadWrite);
+            StreamWriter sw = new StreamWriter(fs); // 创建写入流
+
+            foreach (var fundInfoKV in gFundInfoDict)
+            {
+                String value = fundInfoKV.Key + "|" + fundInfoKV.Value.currEstimateValue.ToString();
+                sw.WriteLine(value);
+            }
+
+            sw.Close(); //关闭文件
+
+            MessageBox.Show("保存完成");
 
         }
     }

@@ -26,9 +26,11 @@ namespace funds
         public float buy1DynamicReduceAnnual; //买一动态折价率年化
         public float heavyIncrease; //重仓股涨幅
         public float currEstimateValuePremiumRate; //估值溢价率
-
+        public float yesterdayEstimateValue; //昨日估值
         public String buyAndSaleStatus; //申赎状态
         public String fundStyle; //基金类型
+        public bool isIndexFund; //是否是指数基金
+        public String indexCode;//指数基金对应的代码
     }
 
     public class StockInfo {
